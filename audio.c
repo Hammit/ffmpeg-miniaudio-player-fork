@@ -17,8 +17,9 @@ void data_callback(ma_device *device, void *pOutput, const void *pInput,
                    ma_uint32 frameCount) {
 
   AVAudioFifo *fifo = (AVAudioFifo *)device->pUserData;
-  //printf("Fifo Size; %d\n", av_audio_fifo_size(fifo));
+  printf("Miniaudio playback. Playing %i samples. ", frameCount);
   av_audio_fifo_read(fifo, &pOutput, frameCount);
+  printf("Fifo Size: %d\n", av_audio_fifo_size(fifo));
 
   (void)pInput;
 }
@@ -138,6 +139,17 @@ int main() {
 
     if (packet->size) {
       decode(context, packet, decoded_frame, fifo);
+      int num_samples = av_audio_fifo_size(fifo);
+      printf("AVAudioFifo has %i samples. ", num_samples);
+
+      enum AVSampleFormat sfmt = context->sample_fmt;
+      if (av_sample_fmt_is_planar(sfmt)) {
+        const char *packed = av_get_sample_fmt_name(sfmt);
+        printf("Warning: the sample format the decoder produced is planar "
+               "(%s). Will output the first channel only.\n",
+               packed ? packed : "?");
+        sfmt = av_get_packed_sample_fmt(sfmt);
+      }
     }
 
     if (data_size < AUDIO_REFIL_THRESH) {
