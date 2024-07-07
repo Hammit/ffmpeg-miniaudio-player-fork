@@ -2,6 +2,7 @@
 #include <libavutil/samplefmt.h>
 #include <stdbool.h>
 #include <stdio.h>
+//#include <string.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavcodec/packet.h>
@@ -79,7 +80,7 @@ int main() {
   AVCodecContext *context = NULL;
   int len = 0;
   FILE *f = NULL;
-  uint8_t inbuf[AUDIO_INBUF_SIZE + AV_INPUT_BUFFER_PADDING_SIZE];
+  //uint8_t inbuf[AUDIO_INBUF_SIZE + AV_INPUT_BUFFER_PADDING_SIZE];
   AVPacket *packet;
   AVFrame *decoded_frame = NULL;
   AVCodecParserContext *parser = NULL;
@@ -118,47 +119,63 @@ int main() {
 
   packet = av_packet_alloc();
 
-  uint8_t *data = inbuf;
-  size_t data_size = fread(inbuf, 1, AUDIO_INBUF_SIZE, f);
-  while (data_size > 0) {
-    if (!decoded_frame) {
-      if (!(decoded_frame = av_frame_alloc())) {
-        fprintf(stderr, "could not allocate audio frame");
+  uint8_t inbuf[AUDIO_INBUF_SIZE + AV_INPUT_BUFFER_PADDING_SIZE];
+  size_t file_bytes_read = fread(inbuf, 1, AUDIO_INBUF_SIZE, f);
+  printf("Read %lu bytes of the audio file.\n", file_bytes_read);
+  while (file_bytes_read > 0) {
+    size_t data_size = file_bytes_read;
+    uint8_t *data = inbuf;
+    while (data_size > 0) {
+      printf("data_size = %lu. ", data_size);
+      if (!decoded_frame) {
+        if (!(decoded_frame = av_frame_alloc())) {
+          fprintf(stderr, "could not allocate audio frame");
+          return -1;
+        }
+      }
+
+      ret = av_parser_parse2(parser, context, &packet->data, &packet->size, data,
+                             data_size, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+      if (ret < 0) {
+        fprintf(stderr, "error while parsing");
         return -1;
       }
-    }
+      data += ret;
+      data_size -= ret;
 
-    ret = av_parser_parse2(parser, context, &packet->data, &packet->size, data,
-                           data_size, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
-    if (ret < 0) {
-      fprintf(stderr, "error while parsing");
-      return -1;
-    }
-    data += ret;
-    data_size -= ret;
+      if (packet->size) {
+        decode(context, packet, decoded_frame, fifo);
+        int num_samples = av_audio_fifo_size(fifo);
+        printf("AVAudioFifo has %i samples. ", num_samples);
 
-    if (packet->size) {
-      decode(context, packet, decoded_frame, fifo);
-      int num_samples = av_audio_fifo_size(fifo);
-      printf("AVAudioFifo has %i samples. ", num_samples);
+        enum AVSampleFormat sfmt = context->sample_fmt;
+        if (av_sample_fmt_is_planar(sfmt)) {
+          const char *packed = av_get_sample_fmt_name(sfmt);
+          printf("Warning: the sample format the decoder produced is planar "
+                 "(%s). Will output the first channel only.\n",
+                 packed ? packed : "?");
+          sfmt = av_get_packed_sample_fmt(sfmt);
+        }
+      }
 
-      enum AVSampleFormat sfmt = context->sample_fmt;
-      if (av_sample_fmt_is_planar(sfmt)) {
-        const char *packed = av_get_sample_fmt_name(sfmt);
-        printf("Warning: the sample format the decoder produced is planar "
-               "(%s). Will output the first channel only.\n",
-               packed ? packed : "?");
-        sfmt = av_get_packed_sample_fmt(sfmt);
+      if (data_size < AUDIO_REFIL_THRESH) {
+        memmove(inbuf, data, data_size);
+        data = inbuf;
+        len = fread(data + data_size, 1, AUDIO_INBUF_SIZE - data_size, f);
+        printf("Read %d bytes of the audio file. data_size < AUDIO_REFIL_THRESH (%lu < %d)\n", len, data_size, AUDIO_REFIL_THRESH);
+        if (len < 0) {
+          data_size += len;
+        }
       }
     }
 
-    if (data_size < AUDIO_REFIL_THRESH) {
-      memmove(inbuf, data, data_size);
-      data = inbuf;
-      len = fread(data + data_size, 1, AUDIO_INBUF_SIZE - data_size, f);
-      if (len < 0) {
-        data_size += len;
-      }
+    //memset(inbuf, 0, AUDIO_INBUF_SIZE + AV_INPUT_BUFFER_PADDING_SIZE); // is it necessary to clear buffer and if so is this correct?
+    file_bytes_read = fread(inbuf, 1, AUDIO_INBUF_SIZE, f);
+    printf("Read %lu bytes of the audio file.\n", file_bytes_read);
+    if (feof(f) != 0) {
+      printf("EOF successfully reached\n");
+    } else {
+      printf("Error reading file: %d\n", ferror(f));
     }
   }
 
